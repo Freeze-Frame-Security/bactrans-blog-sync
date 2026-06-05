@@ -5,8 +5,8 @@ name: Sync GHL blog → bactrans-site
 #
 # This repo is public, so these Actions minutes are free. Nothing sensitive lives here — the
 # script is a GHL → JSON fetcher. The two things it needs are repo secrets (never exposed):
-#   secrets.GHL_PIT        — GHL location PIT (blogs read scope)
-#   secrets.SITE_REPO_PAT  — fine-grained PAT, Contents:write on Freeze-Frame-Security/bactrans-site ONLY
+#   secrets.GHL_PIT         — GHL location PIT (blogs read scope)
+#   secrets.SITE_DEPLOY_KEY — SSH deploy key (private half) with write access to bactrans-site ONLY
 # Optional repo variables (the script has these as defaults):
 #   vars.GHL_LOCATION_ID, vars.GHL_BLOG_ID
 
@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Freeze-Frame-Security/bactrans-site
-          token: ${{ secrets.SITE_REPO_PAT }}
+          ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
           path: site
           ref: main
 

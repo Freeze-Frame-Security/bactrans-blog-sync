@@ -39,9 +39,9 @@ In **this repo** → Settings → Secrets and variables → Actions:
 
 - **Secrets**
   - `GHL_PIT` — the BAC location Private Integration Token (blogs read scope). It lives in `BAC-GHL/.env`.
-  - `SITE_REPO_PAT` — a **fine-grained PAT**: resource owner `Freeze-Frame-Security`, repository access
-    limited to **`bactrans-site` only**, permission **Contents: Read and write**. (This is what lets the
-    public job push into the private site repo.)
+  - `SITE_DEPLOY_KEY` — the **private** half of an SSH **deploy key** whose public half is added to
+    **bactrans-site → Settings → Deploy keys** with **Allow write access** checked. Scoped to that one
+    repo only — this is what lets the public job push into the private site repo.
 - **Variables** (optional — the script defaults to these):
   - `GHL_LOCATION_ID` = `5vl1i6L9tX4pQoZOAD0j`
   - `GHL_BLOG_ID` = `UGWHOqzMETf25JAuLJRU`
