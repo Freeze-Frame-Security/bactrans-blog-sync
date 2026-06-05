@@ -1,0 +1,13 @@
+{
+  "name": "bactrans-blog-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Syncs the GoHighLevel BAC Blog into the bactrans-site repo as committed content.",
+  "scripts": {
+    "sync": "node scripts/sync-ghl-blog.mjs"
+  },
+  "dependencies": {
+    "node-html-parser": "^7.1.0"
+  }
+}

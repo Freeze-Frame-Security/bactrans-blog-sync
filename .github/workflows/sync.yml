@@ -1,0 +1,64 @@
+name: Sync GHL blog → bactrans-site
+
+# Pulls the GoHighLevel "BAC Blog" and commits the generated content into the PRIVATE
+# bactrans-site repo. That push triggers the normal Cloudflare build, which redeploys the site.
+#
+# This repo is public, so these Actions minutes are free. Nothing sensitive lives here — the
+# script is a GHL → JSON fetcher. The two things it needs are repo secrets (never exposed):
+#   secrets.GHL_PIT        — GHL location PIT (blogs read scope)
+#   secrets.SITE_REPO_PAT  — fine-grained PAT, Contents:write on Freeze-Frame-Security/bactrans-site ONLY
+# Optional repo variables (the script has these as defaults):
+#   vars.GHL_LOCATION_ID, vars.GHL_BLOG_ID
+
+on:
+  schedule:
+    - cron: '17 * * * *'   # hourly at :17
+  workflow_dispatch: {}      # on-demand "Run workflow" button
+
+concurrency:
+  group: sync-ghl-blog
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this (automation) repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Checkout the private site repo
+        uses: actions/checkout@v4
+        with:
+          repository: Freeze-Frame-Security/bactrans-site
+          token: ${{ secrets.SITE_REPO_PAT }}
+          path: site
+          ref: main
+
+      - name: Sync GHL → site/src/content/blog
+        env:
+          GHL_PIT: ${{ secrets.GHL_PIT }}
+          GHL_LOCATION_ID: ${{ vars.GHL_LOCATION_ID }}
+          GHL_BLOG_ID: ${{ vars.GHL_BLOG_ID }}
+          BLOG_OUT_DIR: ${{ github.workspace }}/site/src/content/blog
+        run: npm run sync
+
+      - name: Commit & push to site repo if changed
+        working-directory: site
+        run: |
+          if [[ -n "$(git status --porcelain src/content/blog)" ]]; then
+            git config user.name  "bac-blog-sync[bot]"
+            git config user.email "bac-blog-sync@users.noreply.github.com"
+            git add src/content/blog
+            git commit -m "chore(blog): sync from GHL"
+            git push
+            echo "Pushed blog updates to bactrans-site."
+          else
+            echo "No blog changes."
+          fi
