@@ -48,6 +48,25 @@ In **this repo** → Settings → Secrets and variables → Actions:
 
 Then it runs hourly automatically. Use **Actions → Sync GHL blog → Run workflow** to publish on demand.
 
+### If the sync stops running
+
+GitHub disables a cron schedule after **60 days of no repository activity**, and this job pushes
+only to `bactrans-site` — never to itself — so this repo can sit at zero activity while the sync
+looks healthy. That is how it died silently on **2026-08-04** (557 green runs, then nothing for
+16 days, with no failure to alert on).
+
+The job now pushes a fortnightly `.github/keepalive` heartbeat to reset that clock. If it ever
+does go dormant again, GitHub will not restart it on its own — someone has to click **Actions →
+Sync GHL blog → Enable workflow**. Check `state` on the workflow to confirm:
+
+```bash
+gh api repos/Freeze-Frame-Security/bactrans-blog-sync/actions/workflows --jq '.workflows[].state'
+# "active" = healthy · "disabled_inactivity" = dormant, needs a manual re-enable
+```
+
+Worth knowing: a dormant schedule is invisible on the Actions tab, which shows a wall of green
+runs. Staleness of the newest run is the only signal.
+
 ## Run locally
 
 ```bash

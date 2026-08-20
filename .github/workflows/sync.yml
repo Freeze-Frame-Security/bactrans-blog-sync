@@ -22,6 +22,8 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # keepalive step commits a heartbeat into THIS repo
     steps:
       - name: Checkout this (automation) repo
         uses: actions/checkout@v4
@@ -62,3 +64,27 @@ jobs:
           else
             echo "No blog changes."
           fi
+
+      # This job only ever pushes to bactrans-site, so THIS repo can sit at zero activity
+      # indefinitely — and GitHub disables a cron schedule after 60 days of repo inactivity.
+      # That is exactly how the sync died silently on 2026-08-04. A fortnightly heartbeat
+      # commit here keeps the clock reset. Runs even if the sync failed: keeping the
+      # schedule alive matters more than the outcome of any single run.
+      - name: Keepalive heartbeat (stops GitHub auto-disabling the cron)
+        if: always()
+        run: |
+          stamp=.github/keepalive
+          last=$(cat "$stamp" 2>/dev/null || echo 0)
+          now=$(date +%s)
+          if (( now - last < 1209600 )); then
+            echo "Heartbeat is $(( (now - last) / 86400 ))d old; nothing to do."
+            exit 0
+          fi
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > "$stamp.iso"
+          echo "$now" > "$stamp"
+          git config user.name  "bac-blog-sync[bot]"
+          git config user.email "bac-blog-sync@users.noreply.github.com"
+          git add "$stamp" "$stamp.iso"
+          git commit -m "chore: keepalive heartbeat (prevents cron auto-disable)"
+          git push
+          echo "Heartbeat pushed; 60-day inactivity clock reset."
