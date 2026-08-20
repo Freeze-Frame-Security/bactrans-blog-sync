@@ -50,7 +50,12 @@ if (!PIT) {
 }
 
 async function fetchText(url, headers = {}) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA, ...headers } });
+  // Node's fetch has no default timeout; without this a stalled upstream holds the
+  // Action open to the 6h job cap instead of failing fast.
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, ...headers },
+    signal: AbortSignal.timeout(20_000),
+  });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
   return res.text();
 }
@@ -206,10 +211,15 @@ async function main() {
   console.log(`GHL: ${metas.length} published post(s).`);
   const writtenSlugs = new Set();
   let stubHeals = 0;
+  let skipped = 0;
 
   for (const meta of metas) {
     const slug = meta.urlSlug;
-    if (!slug) { console.warn(`  - skip post ${meta._id}: no urlSlug`); continue; }
+    if (!slug) { console.warn(`  - skip post ${meta._id}: no urlSlug`); skipped++; continue; }
+    if (!/^[a-z0-9][a-z0-9-]*$/i.test(slug)) {
+      console.warn(`  ! skip post ${meta._id}: unsafe urlSlug ${JSON.stringify(slug)}`);
+      skipped++; continue;
+    }
     let rendered;
     try {
       rendered = parseRenderedPost(await fetchText(`${BLOG_HOST}/post/${slug}`));
@@ -236,11 +246,11 @@ async function main() {
           console.log(`  - ${slug}: GHL body was a stub -> healed from Squarespace /bacblog/${sqspSlug}`);
         } else {
           console.warn(`  ! ${slug}: stub in GHL and no full Squarespace source; SKIPPING (won't publish a stub).`);
-          continue;
+          skipped++; continue;
         }
       } catch (e) {
         console.warn(`  ! ${slug}: stub in GHL and Squarespace fallback failed (${e.message}); SKIPPING.`);
-        continue;
+        skipped++; continue;
       }
     } else {
       body = sanitize(body);
@@ -275,10 +285,27 @@ async function main() {
   }
 
   // Prune local posts that no longer exist (unpublished/deleted in GHL).
+  //
+  // Deletions here are committed straight into bactrans-site and go live, so the prune runs
+  // ONLY from a listing we trust completely. Two ways this run could be lying:
+  //   - metas is empty: listPublishedPosts() does `data.blogs || []`, so a 200-with-error-body
+  //     or a revoked PIT reads as "the blog has no posts" and would delete every article.
+  //   - a post failed to render/heal: it is absent from writtenSlugs for transient reasons,
+  //     not because the author unpublished it.
+  // In both cases the safe move is to keep what is already live and let the run go red.
   const existing = (await readdir(OUT_DIR)).filter((f) => f.endsWith('.json'));
-  for (const f of existing) {
-    const slug = f.replace(/\.json$/, '');
-    if (!writtenSlugs.has(slug)) {
+  const stale = existing.filter((f) => !writtenSlugs.has(f.replace(/\.json$/, '')));
+
+  if (!metas.length) {
+    // Nothing was written either, so failing loudly costs no publishing.
+    console.error(`::error::REFUSING TO PRUNE: GHL returned 0 published posts, which would delete all ${existing.length} live post(s). Treating this as an upstream failure, not an empty blog.`);
+    process.exitCode = 1;
+  } else if (skipped) {
+    // Healthy posts still publish — only the deletions wait for a clean run. Staying green
+    // deliberately: failing here would stall every future update behind one bad post.
+    console.warn(`::warning::Skipped the prune: ${skipped} post(s) failed to sync, so absence is not proof of deletion. ${stale.length} candidate(s) left live; they will prune on the next clean run.`);
+  } else {
+    for (const f of stale) {
       if (dryRun) console.log(`  [dry-run] would prune ${f} (gone from GHL)`);
       else { await rm(path.join(OUT_DIR, f)); console.log(`  ✗ pruned ${f} (gone from GHL)`); }
     }
