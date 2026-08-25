@@ -1,0 +1,27 @@
+name: Keep-alive commit
+
+# GitHub auto-disables scheduled workflows after 60 days with no repository
+# activity (pushes) — this bit the blog sync workflow (sync.yml) on 2026-08-04
+# because this repo otherwise never gets human commits. This workflow pushes
+# a harmless empty commit once a month so the repo never goes 60 days quiet,
+# which keeps sync.yml's hourly schedule from being disabled again.
+#
+# NOTE: this does not re-enable a workflow that's already disabled — that
+# still requires a one-time manual "Enable workflow" click in the Actions
+# tab (or `gh workflow enable sync.yml`).
+
+on:
+  schedule:
+    - cron: '0 4 1 * *'   # 04:00 UTC on the 1st of each month
+  workflow_dispatch: {}
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git config user.name  "bac-blog-sync[bot]"
+          git config user.email "bac-blog-sync@users.noreply.github.com"
+          git commit --allow-empty -m "chore: monthly keep-alive (prevent scheduled-workflow auto-disable)"
+          git push
