@@ -23,7 +23,7 @@
  *   SQSP_BASE        default https://www.bactrans.com   (Squarespace fallback /bacblog/<slug>)
  *   BLOG_DEFAULT_HERO default /images/scenery/chugach-dawn.webp (used when a post has no image)
  */
-import { writeFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parse } from 'node-html-parser';
 
@@ -203,6 +203,28 @@ function frontmatterDate(v) {
   return isNaN(d) ? null : d.toISOString();
 }
 
+// The `source` values this script writes. OUT_DIR is shared with posts authored on the site
+// itself (`"source": "site"`), which are never in GHL and are not ours to delete.
+const SYNC_SOURCES = new Set(['ghl', 'squarespace-fallback']);
+
+/**
+ * Why the prune must leave this post file alone, or null if this sync wrote it. An explicit
+ * `source` decides. A file with no `source` counts as ours only if it carries a GHL post id.
+ */
+async function whyNotSyncOwned(file) {
+  let doc;
+  try {
+    doc = JSON.parse(await readFile(file, 'utf-8'));
+  } catch (e) {
+    return `could not read it as JSON: ${e.message}`;
+  }
+  const source = doc?.source;
+  if (typeof source === 'string' && source) {
+    return SYNC_SOURCES.has(source) ? null : `source is ${JSON.stringify(source)}`;
+  }
+  return typeof doc?.ghlId === 'string' && doc.ghlId ? null : 'no source and no ghlId';
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
   await mkdir(OUT_DIR, { recursive: true });
@@ -293,15 +315,24 @@ async function main() {
   //   - a post failed to render/heal: it is absent from writtenSlugs for transient reasons,
   //     not because the author unpublished it.
   // In both cases the safe move is to keep what is already live and let the run go red.
+  //
+  // Only files this sync wrote are candidates at all. A post authored on the site is absent
+  // from GHL by design, so its absence says nothing about whether it was deleted.
   const existing = (await readdir(OUT_DIR)).filter((f) => f.endsWith('.json'));
-  const stale = existing.filter((f) => !writtenSlugs.has(f.replace(/\.json$/, '')));
+  const stale = [];
+  for (const f of existing) {
+    if (writtenSlugs.has(f.replace(/\.json$/, ''))) continue;
+    const reason = await whyNotSyncOwned(path.join(OUT_DIR, f));
+    if (reason) console.log(`  - kept ${f}: not written by this sync (${reason})`);
+    else stale.push(f);
+  }
 
   if (!metas.length) {
     // Nothing was written either, so failing loudly costs no publishing.
-    console.error(`::error::REFUSING TO PRUNE: GHL returned 0 published posts, which would delete all ${existing.length} live post(s). Treating this as an upstream failure, not an empty blog.`);
+    console.error(`::error::REFUSING TO PRUNE: GHL returned 0 published posts, which would delete all ${stale.length} synced post(s). Treating this as an upstream failure, not an empty blog.`);
     process.exitCode = 1;
   } else if (skipped) {
-    // Healthy posts still publish — only the deletions wait for a clean run. Staying green
+    // Healthy posts still publish. Only the deletions wait for a clean run. Staying green
     // deliberately: failing here would stall every future update behind one bad post.
     console.warn(`::warning::Skipped the prune: ${skipped} post(s) failed to sync, so absence is not proof of deletion. ${stale.length} candidate(s) left live; they will prune on the next clean run.`);
   } else {

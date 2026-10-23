@@ -20,7 +20,9 @@ GHL "BAC Blog"  ──(hourly Action here)──▶  bactrans-site/src/content/b
    full body out of its embedded `<script id="__NUXT_DATA__">` payload. (The API list returns metadata
    only — no body — and the single-post API is disabled, so the rendered page is the body source.)
 3. Sanitizes the HTML to a safe semantic subset and writes `<BLOG_OUT_DIR>/<slug>.json`.
-4. Prunes local posts that were unpublished/deleted in GHL.
+4. Prunes local posts that were unpublished/deleted in GHL. Only files the sync wrote are pruned:
+   `"source"` is `ghl` or `squarespace-fallback`, or there is no `"source"` but there is a `"ghlId"`.
+   Posts authored on the site itself (`"source": "site"`) share the folder and are always left alone.
 
 The workflow (`.github/workflows/sync.yml`) checks out the private site repo with a scoped token, runs the
 sync into it, and pushes any changes. The push triggers the site's existing Cloudflare build.
