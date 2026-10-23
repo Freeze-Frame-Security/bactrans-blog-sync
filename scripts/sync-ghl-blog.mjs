@@ -43,6 +43,12 @@ const UA = 'Mozilla/5.0 (compatible; BACBlogSync/1.0; +https://www.bactrans.com)
 const KEEP_TAGS = new Set(['h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li', 'a', 'img',
   'strong', 'em', 'b', 'i', 'blockquote', 'figure', 'figcaption', 'br', 'hr']);
 const KEEP_ATTRS = { a: ['href'], img: ['src', 'alt'] };
+// Dropped together with everything inside them: their content is code, styling or a hidden
+// document, never article text. Unwrapping them like other unknown tags would publish a <script>
+// body as page text, or as live markup when it holds a tag. Same list as bactrans-site's
+// render-time sanitizer (src/lib/sanitizeBlogHtml.ts).
+const DROP_TAGS = new Set(['script', 'style', 'template', 'svg', 'math', 'iframe', 'object',
+  'noscript', 'noembed', 'noframes', 'textarea', 'title', 'xmp', 'plaintext']);
 
 if (!PIT) {
   console.error('FATAL: GHL_PIT env var is required (GHL location PIT with blogs read scope).');
@@ -140,12 +146,22 @@ function isSafeUrl(url, { allowHttp = false } = {}) {
 
 /** Strip arbitrary markup down to a safe, semantic subset for in-site rendering. */
 function sanitize(html) {
-  const root = parse(html || '', { lowerCaseTagName: true, comment: false });
+  // The parser keeps the content of these as one unparsed text node (DROP_TAGS removes them).
+  // <pre> is left off its default list so its content is parsed as markup, as browsers do.
+  const root = parse(html || '', { lowerCaseTagName: true, comment: false,
+    blockTextElements: { script: true, noscript: true, style: true } });
   const walk = (node) => {
     for (const child of [...node.childNodes]) {
-      if (child.nodeType !== 1) continue; // keep text, drop comments handled by parser
-      walk(child);
+      if (child.nodeType === 3) {
+        // A "<" left in text never opened a tag the parser recognised, but a browser may still read
+        // one there ("<img/src=x/onerror=...>"), so it goes out escaped.
+        child.rawText = child.rawText.replace(/</g, '&lt;');
+        continue;
+      }
+      if (child.nodeType !== 1) continue; // comments are dropped by the parser
       const tag = (child.rawTagName || '').toLowerCase();
+      if (DROP_TAGS.has(tag)) { child.remove(); continue; }
+      walk(child);
       if (tag === 'img') {
         const src = normalizeImg(child.getAttribute('data-src') || child.getAttribute('src') || child.getAttribute('data-image') || '');
         const alt = child.getAttribute('alt') || '';
