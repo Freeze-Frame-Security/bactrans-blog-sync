@@ -43,6 +43,12 @@ const UA = 'Mozilla/5.0 (compatible; BACBlogSync/1.0; +https://www.bactrans.com)
 const KEEP_TAGS = new Set(['h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li', 'a', 'img',
   'strong', 'em', 'b', 'i', 'blockquote', 'figure', 'figcaption', 'br', 'hr']);
 const KEEP_ATTRS = { a: ['href'], img: ['src', 'alt'] };
+// Dropped together with everything inside them: their content is code, styling or a hidden
+// document, never article text. Unwrapping them like other unknown tags would publish a <script>
+// body as page text, or as live markup when it holds a tag. Same list as bactrans-site's
+// render-time sanitizer (src/lib/sanitizeBlogHtml.ts).
+const DROP_TAGS = new Set(['script', 'style', 'template', 'svg', 'math', 'iframe', 'object',
+  'noscript', 'noembed', 'noframes', 'textarea', 'title', 'xmp', 'plaintext']);
 
 if (!PIT) {
   console.error('FATAL: GHL_PIT env var is required (GHL location PIT with blogs read scope).');
@@ -121,30 +127,67 @@ function normalizeImg(src) {
   return src.replace(/\?format=\d+w/, '?format=1500w');
 }
 
+/**
+ * Is a link or image URL safe to publish? Same rules as bactrans-site's src/lib/safeHref.ts, which
+ * checks every synced body again at build time: same-site /paths, https URLs, mailto:/tel: and
+ * #anchors pass. Links (allowHttp) may also be plain http://, which older posts use: a weak link,
+ * not a script one. Everything else fails: javascript:, data:, vbscript:, protocol-relative //host
+ * or /\host, and any value with whitespace or control characters (browsers strip those out of URLs,
+ * so "java<tab>script:" still runs). Takes the DECODED value: node-html-parser's getAttribute()
+ * already resolves character references, so "&#106;avascript:" arrives here as "javascript:".
+ */
+function isSafeUrl(url, { allowHttp = false } = {}) {
+  let u = (url || '').trim();
+  if (allowHttp) u = u.replace(/^http:\/\//i, 'https://');
+  if (!u || /[\s\u0000-\u001f\u007f]/.test(u)) return false;
+  return /^\/(?![/\\])/.test(u) || /^https:\/\/[^/\\]/i.test(u)
+    || /^(mailto|tel):./i.test(u) || /^#[\w-]*$/.test(u);
+}
+
 /** Strip arbitrary markup down to a safe, semantic subset for in-site rendering. */
 function sanitize(html) {
-  const root = parse(html || '', { lowerCaseTagName: true, comment: false });
+  // The parser keeps the content of these as one unparsed text node (DROP_TAGS removes them).
+  // <pre> is left off its default list so its content is parsed as markup, as browsers do.
+  const root = parse(html || '', { lowerCaseTagName: true, comment: false,
+    blockTextElements: { script: true, noscript: true, style: true } });
   const walk = (node) => {
     for (const child of [...node.childNodes]) {
-      if (child.nodeType !== 1) continue; // keep text, drop comments handled by parser
-      walk(child);
+      if (child.nodeType === 3) {
+        // A "<" left in text never opened a tag the parser recognised, but a browser may still read
+        // one there ("<img/src=x/onerror=...>"), so it goes out escaped.
+        child.rawText = child.rawText.replace(/</g, '&lt;');
+        continue;
+      }
+      if (child.nodeType !== 1) continue; // comments are dropped by the parser
       const tag = (child.rawTagName || '').toLowerCase();
+      if (DROP_TAGS.has(tag)) { child.remove(); continue; }
+      walk(child);
       if (tag === 'img') {
         const src = normalizeImg(child.getAttribute('data-src') || child.getAttribute('src') || child.getAttribute('data-image') || '');
         const alt = child.getAttribute('alt') || '';
         for (const a of Object.keys(child.attributes)) child.removeAttribute(a);
-        if (!src) { child.remove(); continue; }
-        child.setAttribute('src', src);
+        if (!isSafeUrl(src)) { child.remove(); continue; }
+        // src came out of getAttribute() decoded and setAttribute() writes it back raw, so "&" is
+        // escaped again; otherwise a browser decodes it twice ("/&amp;sol;x" -> "/&sol;x" -> "//x").
+        child.setAttribute('src', src.replace(/&/g, '&amp;'));
         child.setAttribute('alt', alt);
         child.setAttribute('loading', 'lazy');
       } else if (KEEP_TAGS.has(tag)) {
         const allowed = KEEP_ATTRS[tag] || [];
         for (const a of Object.keys(child.attributes)) if (!allowed.includes(a)) child.removeAttribute(a);
         if (tag === 'a') {
-          const href = child.getAttribute('href') || '';
-          if (/^https?:\/\//i.test(href) && !href.includes('bactrans.com')) {
-            child.setAttribute('rel', 'noopener');
-            child.setAttribute('target', '_blank');
+          // getAttribute() returns the first href, the one browsers follow.
+          const href = child.getAttribute('href');
+          if (href !== undefined && !isSafeUrl(href, { allowHttp: true })) {
+            child.removeAttribute('href'); // the link text stays, as plain text
+          } else if (href !== undefined) {
+            // Writing href back rebuilds the tag from the parsed attributes, so a second href that
+            // browsers ignore (but that could still spell javascript:) is not copied through.
+            child.setAttribute('href', child.rawAttributes.href);
+            if (/^https?:\/\//i.test(href) && !href.includes('bactrans.com')) {
+              child.setAttribute('rel', 'noopener');
+              child.setAttribute('target', '_blank');
+            }
           }
         }
       } else {
